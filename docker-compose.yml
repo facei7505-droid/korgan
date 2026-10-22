@@ -1,0 +1,43 @@
+# One command: docker compose up --build
+# Telegram bot too:  TELEGRAM_BOT_TOKEN=... docker compose --profile telegram up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qorgan
+      POSTGRES_PASSWORD: qorgan
+      POSTGRES_DB: qorgan
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qorgan"]
+      interval: 2s
+      retries: 30
+
+  api:
+    build: ./api
+    environment:
+      QORGAN_DATABASE_URL: postgresql+psycopg://qorgan:qorgan@db:5432/qorgan
+      QORGAN_PEPPER: ${QORGAN_PEPPER:-change-me-in-production}
+      QORGAN_API_KEYS: ${QORGAN_API_KEYS:-admin:dev-admin-key,bank:dev-bank-key,bot:dev-bot-key}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    build: ./web
+    ports: ["5173:80"]
+    depends_on: [api]
+
+  bot:
+    build: ./bot
+    profiles: [telegram]
+    environment:
+      QORGAN_API_URL: http://api:8000
+      QORGAN_BOT_KEY: dev-bot-key
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    depends_on: [api]
+
+volumes:
+  pgdata:
