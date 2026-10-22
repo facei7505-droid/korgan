@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import Base, SessionLocal, engine
+from .db import SessionLocal, migrate
 from .events import bus
 from .risk.model import get_model
 from .routers import demo, intel, ops, signals, transfers
@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bus.bind(asyncio.get_running_loop())
-    Base.metadata.create_all(engine)
+    migrate()
     get_model()  # train/load before the first request
     if settings.seed_demo:
         with SessionLocal() as db:
