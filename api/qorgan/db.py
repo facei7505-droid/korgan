@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,6 +17,7 @@ else:
 engine = create_engine(settings.database_url, **_engine_kw)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
+log = logging.getLogger("qorgan.db")
 MIGRATION_LOCK = 72_710_001  # arbitrary advisory-lock key shared by all API workers
 
 
@@ -51,14 +53,26 @@ def _migrate() -> None:
     from alembic import command
     from alembic.config import Config
 
+    from . import models  # noqa: F401  (fills Base.metadata)
+
     root = Path(__file__).resolve().parent.parent
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "migrations"))
     cfg.attributes["configure_logger"] = False
-    tables = set(inspect(engine).get_table_names())
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
     if "customers" in tables and "alembic_version" not in tables:
-        # Database created before migrations existed (create_all): adopt it at the first revision.
-        command.stamp(cfg, "0001")
+        # Created by create_all before migrations existed (demo builds only). Adopt it at the first
+        # revision if its columns are complete; an older demo schema is rebuilt from scratch.
+        complete = all(
+            t.name in tables and {c.name for c in t.columns} <= {c["name"] for c in insp.get_columns(t.name)}
+            for t in Base.metadata.sorted_tables
+        )
+        if complete:
+            command.stamp(cfg, "0001")
+        else:
+            log.warning("outdated pre-migration demo schema found, recreating it")
+            Base.metadata.drop_all(engine)
     command.upgrade(cfg, "head")
 
 
