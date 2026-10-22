@@ -29,6 +29,9 @@ class Customer(Base):
     age: Mapped[int] = mapped_column(Integer, default=40)
     # Median of the customer's usual transfers, KZT. Kept by the bank, sent with the score request.
     typical_amount: Mapped[float] = mapped_column(Float, default=20000)
+    # Latest device state reported by the SDK (screen sharing / remote-access app running).
+    screen_sharing: Mapped[bool] = mapped_column(Boolean, default=False)
+    remote_access_app: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     guardians: Mapped[list["Guardian"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
@@ -80,6 +83,21 @@ class CallSignal(Base):
     in_contacts: Mapped[bool] = mapped_column(Boolean, default=False)
     spoof_suspected: Mapped[bool] = mapped_column(Boolean, default=False)
     mass_caller: Mapped[bool] = mapped_column(Boolean, default=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BankCall(Base):
+    """An outbound call the bank's own call centre is making right now.
+
+    Lets the app tell the customer «банк вам сейчас НЕ звонит» during any other call.
+    """
+
+    __tablename__ = "bank_calls"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("bcall"))
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), index=True)
+    agent: Mapped[str] = mapped_column(String(80), default="")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -158,6 +176,7 @@ class Transfer(Base):
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     hold_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(80), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

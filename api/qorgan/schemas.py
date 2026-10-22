@@ -21,6 +21,8 @@ class BehaviorIn(BaseModel):
     session_seconds: float = 0
     pasted_recipient: bool = False
     app_switches: int = 0
+    screen_sharing: bool = False
+    remote_access_app: bool = False
 
 
 class Recipient(BaseModel):
@@ -34,6 +36,7 @@ class ScoreRequest(BaseModel):
     recipient: Recipient
     behavior: BehaviorIn = BehaviorIn()
     local_hour: int | None = Field(None, ge=0, le=23)
+    lang: Literal["ru", "kk"] = "ru"
 
 
 class ChallengeAnswer(BaseModel):
@@ -85,3 +88,14 @@ class CustomerIn(BaseModel):
     name: str
     age: int = 40
     typical_amount: float = 20000
+
+
+class BankCallIn(BaseModel):
+    customer_id: str
+    agent: str = ""
+
+
+class DeviceState(BaseModel):
+    customer_id: str
+    screen_sharing: bool = False
+    remote_access_app: bool = False

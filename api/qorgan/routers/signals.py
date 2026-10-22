@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..events import emit
 from ..intel.extract import fingerprint, mask_phone, norm_phone
-from ..models import CallSignal, Customer, Guardian, utcnow
-from ..schemas import CallStart, CustomerIn, GuardianIn, GuardianLink
+from ..models import BankCall, CallSignal, Customer, Guardian, utcnow
+from ..schemas import BankCallIn, CallStart, DeviceState, CustomerIn, GuardianIn, GuardianLink
 from ..security import require
 
 router = APIRouter(prefix="/v1", tags=["signals & customers"])
@@ -53,6 +53,50 @@ def call_ended(call_id: str, db: Session = Depends(get_db)) -> dict:
         emit(db, "call.ended", call_out(c))
         db.commit()
     return call_out(c)
+
+
+@router.post("/signals/device", dependencies=[require("bank")])
+def device_state(body: DeviceState, db: Session = Depends(get_db)) -> dict:
+    """SDK reports screen sharing / remote-access apps (AnyDesk, RustDesk, TeamViewer...)."""
+    c = db.get(Customer, body.customer_id)
+    if not c:
+        raise HTTPException(404, "customer not found")
+    c.screen_sharing, c.remote_access_app = body.screen_sharing, body.remote_access_app
+    emit(db, "device.state", body.model_dump())
+    db.commit()
+    return body.model_dump()
+
+
+@router.post("/bank-calls", dependencies=[require("bank")])
+def bank_call_started(body: BankCallIn, db: Session = Depends(get_db)) -> dict:
+    """The bank's call centre registers its own outbound call to a customer."""
+    if not db.get(Customer, body.customer_id):
+        raise HTTPException(404, "customer not found")
+    bc = BankCall(customer_id=body.customer_id, agent=body.agent)
+    db.add(bc)
+    db.flush()
+    emit(db, "bank_call.started", {"id": bc.id, "customer_id": bc.customer_id, "agent": bc.agent})
+    db.commit()
+    return {"id": bc.id, "customer_id": bc.customer_id}
+
+
+@router.post("/bank-calls/{call_id}/end", dependencies=[require("bank")])
+def bank_call_ended(call_id: str, db: Session = Depends(get_db)) -> dict:
+    bc = db.get(BankCall, call_id)
+    if not bc:
+        raise HTTPException(404, "call not found")
+    if bc.ended_at is None:
+        bc.ended_at = utcnow()
+        emit(db, "bank_call.ended", {"id": bc.id, "customer_id": bc.customer_id})
+        db.commit()
+    return {"id": bc.id, "ended": True}
+
+
+@router.get("/customers/{customer_id}/call-check", dependencies=[require("bank")])
+def call_check(customer_id: str, db: Session = Depends(get_db)) -> dict:
+    """For the in-app banner: is the bank really calling this customer right now?"""
+    bc = db.scalar(select(BankCall).where(BankCall.customer_id == customer_id, BankCall.ended_at.is_(None)))
+    return {"bank_is_calling": bc is not None, "agent": bc.agent if bc else None}
 
 
 @router.get("/customers/{customer_id}/calls", dependencies=[require("bank")])

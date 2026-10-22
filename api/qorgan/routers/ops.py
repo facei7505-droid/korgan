@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -24,8 +25,12 @@ def recent_events(limit: int = 100, type: str | None = None, db: Session = Depen
 
 
 @router.get("/events/stream", dependencies=[require("bank", "bot")])
-async def stream(request: Request) -> StreamingResponse:
-    """Server-Sent Events. EventSource cannot set headers, so `?key=` is accepted here."""
+async def stream(request: Request, customer_id: str | None = None) -> StreamingResponse:
+    """Server-Sent Events. EventSource cannot set headers, so `?key=` is accepted here.
+
+    `customer_id` limits the stream to one customer's events (what a customer or guardian device
+    should subscribe with), so one person's alerts never reach another person's screen.
+    """
     q = bus.subscribe()
 
     async def gen():
@@ -34,6 +39,8 @@ async def stream(request: Request) -> StreamingResponse:
             while not await request.is_disconnected():
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=15)
+                    if customer_id and not _belongs(msg, customer_id):
+                        continue
                     yield f"data: {msg}\n\n"
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"
@@ -41,6 +48,16 @@ async def stream(request: Request) -> StreamingResponse:
             bus.unsubscribe(q)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _belongs(msg: str, customer_id: str) -> bool:
+    data = json.loads(msg)
+    return data.get("type") == "demo.reset" or (data.get("payload") or {}).get("customer_id") == customer_id
+
+
+@router.get("/model", dependencies=[require("bank")])
+def model_card() -> dict:
+    return get_model().card()
 
 
 @router.get("/stats", dependencies=[require("bank")])

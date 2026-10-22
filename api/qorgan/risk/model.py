@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 FEATURES: list[str] = [
@@ -28,6 +30,8 @@ FEATURES: list[str] = [
     "pasted_recipient",       # recipient pasted or dictated rather than chosen
     "app_switches",           # switches away from the app during the flow (capped)
     "night",                  # 23:00-06:00 local
+    "remote_control",         # screen sharing or a remote-access app (AnyDesk, RustDesk...) active
+    "recipient_fan_in_log",   # log1p(distinct customers who paid this recipient for the first time in 24h)
 ]
 
 REASON_TEXT: dict[str, str] = {
@@ -44,6 +48,26 @@ REASON_TEXT: dict[str, str] = {
     "pasted_recipient": "Реквизиты вставлены, а не выбраны из истории",
     "app_switches": "Клиент переключался между банком и звонком",
     "night": "Ночное время",
+    "remote_control": "Включена демонстрация экрана или удалённый доступ (AnyDesk и т.п.)",
+    "recipient_fan_in_log": "На эту карту за сутки впервые переводили сразу несколько клиентов (признак дропа)",
+}
+
+REASON_TEXT_KK: dict[str, str] = {
+    "call_active": "Клиент дәл қазір телефонмен сөйлесіп отыр",
+    "unknown_caller": "Контактілерде жоқ нөмірден қоңырау",
+    "call_minutes_log": "Аударым алдында ұзақ сөйлесу",
+    "recent_call_decay": "Күдікті қоңыраудан кейін бірден аударым",
+    "messenger_call": "Мессенджер арқылы қоңырау (WhatsApp/Telegram)",
+    "telco_risk": "Оператор нөмірді белгіледі: жалған нөмір немесе жаппай қоңырау",
+    "recipient_new": "Жаңа алушы, бұрын аударым болмаған",
+    "amount_ratio_log": "Сома клиент үшін әдеттегіден әлдеқайда көп",
+    "elderly": "Тәуекел тобындағы клиент (60+)",
+    "hesitation": "Біреу айтып отырғандай: үзілістер, сенімсіздік",
+    "pasted_recipient": "Деректемелер тарихтан таңдалмай, қойылған",
+    "app_switches": "Клиент банк пен қоңырау арасында ауысты",
+    "night": "Түнгі уақыт",
+    "remote_control": "Экранды көрсету немесе қашықтан қол жеткізу қосулы (AnyDesk т.б.)",
+    "recipient_fan_in_log": "Бұл картаға бір тәулікте бірнеше клиент алғаш рет аударды (дроп белгісі)",
 }
 
 
@@ -57,11 +81,28 @@ class RiskModel:
     def __init__(self) -> None:
         self.scaler = StandardScaler()
         self.clf = LogisticRegression(C=0.1, max_iter=2000)
-        self.version = "bootstrap-synthetic-2"
+        self.version = "bootstrap-synthetic-3"
+        self.metrics: dict[str, float] = {}
 
     def train(self, X: np.ndarray, y: np.ndarray) -> None:
-        Xs = self.scaler.fit_transform(X)
-        self.clf.fit(Xs, y)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
+        self.clf.fit(self.scaler.fit_transform(X_tr), y_tr)
+        p = self.clf.predict_proba(self.scaler.transform(X_te))[:, 1]
+        self.metrics = {
+            "roc_auc": round(float(roc_auc_score(y_te, p)), 4),
+            "pr_auc": round(float(average_precision_score(y_te, p)), 4),
+            "n_train": int(len(y_tr)), "n_test": int(len(y_te)), "fraud_rate": round(float(y.mean()), 3),
+        }
+
+    def card(self) -> dict:
+        """Model card: what it is, what it was trained on, how it weighs each signal."""
+        return {
+            "version": self.version,
+            "type": "logistic regression (explainable)",
+            "trained_on": "synthetic sessions encoding published APP-fraud patterns; retrain on bank data in pilot",
+            "metrics_on_synthetic_holdout": self.metrics,
+            "weights": {f: round(float(c), 3) for f, c in zip(FEATURES, self.clf.coef_[0])},
+        }
 
     def explain(self, x: dict[str, float]) -> Explained:
         vec = np.array([[float(x.get(f, 0.0)) for f in FEATURES]])
@@ -99,6 +140,8 @@ def synthetic_dataset(n: int = 12000, fraud_rate: float = 0.12, seed: int = 7) -
             pasted = rng.random() < 0.55
             switches = min(rng.poisson(1.5), 6)
             night = rng.random() < 0.1
+            remote = rng.random() < 0.3
+            fan_in = rng.poisson(1.2)
         else:
             has_call = rng.random() < 0.25
             active = has_call and rng.random() < 0.5
@@ -114,10 +157,12 @@ def synthetic_dataset(n: int = 12000, fraud_rate: float = 0.12, seed: int = 7) -
             pasted = rng.random() < 0.2
             switches = min(rng.poisson(0.4), 6)
             night = rng.random() < 0.06
+            remote = rng.random() < 0.005
+            fan_in = rng.poisson(0.05)
         rows.append([
             float(active), float(unknown), float(np.log1p(minutes)), decay, float(messenger),
             float(telco), float(new_rcpt), float(np.log(max(ratio, 0.05))), float(elderly),
-            hes, float(pasted), float(switches), float(night),
+            hes, float(pasted), float(switches), float(night), float(remote), float(np.log1p(fan_in)),
         ])
     return np.array(rows), y
 
