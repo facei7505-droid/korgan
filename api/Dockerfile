@@ -6,4 +6,5 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY qorgan ./qorgan
 EXPOSE 8000
-CMD ["uvicorn", "qorgan.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+# Workers share live events through Postgres LISTEN/NOTIFY, so scaling out is safe.
+CMD ["uvicorn", "qorgan.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--workers", "4"]

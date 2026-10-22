@@ -1,0 +1,47 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: qorgan
+          POSTGRES_PASSWORD: qorgan
+          POSTGRES_DB: qorgan
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U qorgan" --health-interval 2s --health-retries 30
+    defaults:
+      run:
+        working-directory: api
+    env:
+      QORGAN_DATABASE_URL: postgresql+psycopg://qorgan:qorgan@localhost:5432/qorgan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build

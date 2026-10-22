@@ -1,13 +1,14 @@
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import SessionLocal, migrate
-from .events import bus
+from .db import prepare_database
+from .events import bus, start_listener
 from .risk.model import get_model
 from .routers import demo, intel, ops, signals, transfers
 from .seed import seed
@@ -18,12 +19,12 @@ logging.basicConfig(level=logging.INFO)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bus.bind(asyncio.get_running_loop())
-    migrate()
-    get_model()  # train/load before the first request
-    if settings.seed_demo:
-        with SessionLocal() as db:
-            seed(db)
+    prepare_database(seed if settings.seed_demo else None)
+    get_model()  # train before the first request
+    stop = threading.Event()
+    start_listener(stop)
     yield
+    stop.set()
 
 
 app = FastAPI(

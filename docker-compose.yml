@@ -1,4 +1,4 @@
-# One command: docker compose up --build
+# One command: docker compose up --build   (or double-click start.cmd on Windows, ./start.sh elsewhere)
 # Telegram bot too:  TELEGRAM_BOT_TOKEN=... docker compose --profile telegram up --build
 services:
   db:
@@ -24,11 +24,18 @@ services:
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 3s
+      retries: 40
+    restart: unless-stopped
 
   web:
     build: ./web
     ports: ["5173:80"]
-    depends_on: [api]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
 
   bot:
     build: ./bot
