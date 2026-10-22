@@ -3,7 +3,7 @@ import { kzt, type QEvent } from '../lib/api'
 const ICON: Record<string, string> = {
   'call.started': '📞', 'call.ended': '📴', 'transfer.scored': '💸', 'transfer.updated': '🔁', 'guardian.alert': '👦',
   'indicator.new': '🧷', 'indicator.seen': '🔂', 'apa.turn': '🧓', 'case.opened': '📂', 'report.received': '📨',
-  'guardian.linked': '🔗', 'demo.reset': '♻️',
+  'guardian.linked': '🔗', 'demo.reset': '♻️', 'device.state': '📺', 'bank_call.started': '🏦', 'bank_call.ended': '🏦',
 }
 
 export function describe(e: QEvent): string {
@@ -21,6 +21,9 @@ export function describe(e: QEvent): string {
     case 'report.received': return `Жалоба: ${p.verdict}${p.scheme ? `, ${p.scheme}` : ''}`
     case 'guardian.linked': return `${p.name} подключил Telegram`
     case 'demo.reset': return 'Демо сброшено'
+    case 'device.state': return p.screen_sharing || p.remote_access_app ? 'Устройство: демонстрация экрана / удалённый доступ' : 'Устройство: удалённый доступ выключен'
+    case 'bank_call.started': return 'Банк сам звонит клиенту (подтверждённый звонок)'
+    case 'bank_call.ended': return 'Звонок банка завершён'
     default: return e.type
   }
 }

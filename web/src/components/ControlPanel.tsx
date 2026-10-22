@@ -4,6 +4,8 @@ import { api, type DemoInfo } from '../lib/api'
 /** Stage controls: simulate what the phone OS / telecom operator reports to the bank. */
 export function ControlPanel({ demo }: { demo: DemoInfo }) {
   const [callId, setCallId] = useState<string | null>(null)
+  const [bankCallId, setBankCallId] = useState<string | null>(null)
+  const [remote, setRemote] = useState(false)
   const [copied, setCopied] = useState('')
 
   const start = async (body: object) => {
@@ -19,6 +21,20 @@ export function ControlPanel({ demo }: { demo: DemoInfo }) {
   const reset = async () => {
     await api('/v1/demo/reset', { method: 'POST' })
     setCallId(null)
+    setBankCallId(null)
+    setRemote(false)
+  }
+  const toggleBankCall = async () => {
+    if (bankCallId) {
+      await api(`/v1/bank-calls/${bankCallId}/end`, { method: 'POST' })
+      setBankCallId(null)
+    } else {
+      setBankCallId((await api('/v1/bank-calls', { body: { customer_id: demo.customer_id, agent: 'Колл-центр банка' } })).id)
+    }
+  }
+  const toggleRemote = async () => {
+    await api('/v1/signals/device', { body: { customer_id: demo.customer_id, screen_sharing: !remote, remote_access_app: !remote } })
+    setRemote(!remote)
   }
   const copy = (label: string, v: string) => {
     navigator.clipboard?.writeText(v)
@@ -45,6 +61,17 @@ export function ControlPanel({ demo }: { demo: DemoInfo }) {
             👦 Звонит внук (контакт)
           </button>
           <button disabled={!callId} className={`${btn} bg-white/5 text-slate-300 ring-white/10 disabled:opacity-30`} onClick={end}>📴 Завершить звонок</button>
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Устройство и банк</div>
+        <div className="space-y-2">
+          <button className={`${btn} ${remote ? 'bg-red-500/25 text-red-100 ring-red-500/50' : 'bg-white/5 text-slate-200 ring-white/10'}`} onClick={toggleRemote}>
+            📺 {remote ? 'Демонстрация экрана / AnyDesk включены' : 'Мошенник просит включить AnyDesk'}
+          </button>
+          <button className={`${btn} ${bankCallId ? 'bg-emerald-500/20 text-emerald-100 ring-emerald-500/40' : 'bg-white/5 text-slate-200 ring-white/10'}`} onClick={toggleBankCall}>
+            🏦 {bankCallId ? 'Банк сейчас реально звонит (выключить)' : 'Банк реально звонит клиенту'}
+          </button>
         </div>
       </div>
       <div>

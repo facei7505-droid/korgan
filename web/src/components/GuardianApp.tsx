@@ -8,7 +8,7 @@ type Alert = {
   status?: string
 }
 
-export function GuardianApp() {
+export function GuardianApp({ customerId }: { customerId?: string }) {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [open, setOpen] = useState<string | null>(null)
   const now = new Date()
@@ -21,7 +21,7 @@ export function GuardianApp() {
     }
     if (e.type === 'transfer.updated') setAlerts((a) => a.map((x) => (x.transfer_id === e.payload.id ? { ...x, status: e.payload.status } : x)))
     if (e.type === 'demo.reset') { setAlerts([]); setOpen(null) }
-  })
+  }, customerId)
 
   const decide = async (id: string, approve: boolean) => {
     const t = await api(`/v1/transfers/${id}/guardian`, { body: { approve } }).catch(() => null)
@@ -51,7 +51,7 @@ export function GuardianApp() {
       </div>
 
       {current && (
-        <div className="absolute inset-0 z-10 flex flex-col bg-slate-950/95 px-5 pb-6 pt-12 animate-pop">
+        <div className="absolute inset-0 z-10 flex flex-col bg-slate-950 px-5 pb-6 pt-12 animate-pop">
           <button onClick={() => setOpen(null)} className="self-end text-sm text-slate-400">Закрыть</button>
           <div className="mt-2 text-xs font-semibold uppercase tracking-widest text-amber-400">Требуется ваше решение</div>
           <div className="mt-2 text-2xl font-extrabold leading-tight">{current.customer_name} пытается перевести {kzt(current.amount)}</div>

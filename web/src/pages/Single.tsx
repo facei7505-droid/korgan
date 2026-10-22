@@ -10,5 +10,6 @@ export function BankPage() {
 }
 
 export function GuardianPage() {
-  return <div className="mx-auto h-full max-w-md bg-slate-950 text-white"><GuardianApp /></div>
+  const demo = useDemo()
+  return <div className="mx-auto h-full max-w-md bg-slate-950 text-white">{demo ? <GuardianApp customerId={demo.customer_id} /> : <Loading />}</div>
 }

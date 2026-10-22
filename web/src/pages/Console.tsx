@@ -17,7 +17,7 @@ const DECISION: Record<string, string> = {
 
 /** Bank fraud team / Antifraud Center console. */
 export default function Console() {
-  const [tab, setTab] = useState<'overview' | 'registry' | 'graph' | 'osint'>('overview')
+  const [tab, setTab] = useState<'overview' | 'registry' | 'graph' | 'osint' | 'model'>('overview')
   const [stats, setStats] = useState<Stats | null>(null)
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [events, setEvents] = useState<QEvent[]>([])
@@ -41,7 +41,7 @@ export default function Console() {
         <h1 className="text-2xl font-extrabold">Консоль антифрода</h1>
         <span className={`text-xs ${live ? 'text-emerald-400' : 'text-red-400'}`}>● {live ? 'live' : 'offline'}</span>
         <div className="ml-auto flex gap-1 rounded-xl bg-panel p-1 ring-1 ring-line">
-          {([['overview', 'Обзор'], ['registry', 'Реестр'], ['graph', 'Граф связей'], ['osint', 'OSINT']] as const).map(([k, l]) => (
+          {([['overview', 'Обзор'], ['registry', 'Реестр'], ['graph', 'Граф связей'], ['osint', 'OSINT'], ['model', 'Модель']] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} className={`rounded-lg px-4 py-1.5 text-sm ${tab === k ? 'bg-white/10 font-semibold' : 'text-slate-400'}`}>{l}</button>
           ))}
         </div>
@@ -99,6 +99,7 @@ export default function Console() {
       {tab === 'registry' && <Registry />}
       {tab === 'graph' && <Graph />}
       {tab === 'osint' && <Osint />}
+      {tab === 'model' && <ModelCard />}
     </div>
   )
 }
@@ -230,6 +231,51 @@ function Osint() {
         </div>
       )}
       {res?.error && <div className="text-red-300">{res.error}</div>}
+    </div>
+  )
+}
+
+const FEATURE_RU: Record<string, string> = {
+  call_active: 'Идёт звонок', unknown_caller: 'Незнакомый номер', call_minutes_log: 'Длительность звонка',
+  recent_call_decay: 'Звонок недавно', messenger_call: 'Звонок в мессенджере', telco_risk: 'Флаг оператора',
+  recipient_new: 'Новый получатель', amount_ratio_log: 'Сумма к обычной', elderly: 'Клиент 60+',
+  hesitation: 'Колебания при вводе', pasted_recipient: 'Реквизиты вставлены', app_switches: 'Переключения приложений',
+  night: 'Ночь', remote_control: 'Удалённый доступ / экран', recipient_fan_in_log: 'Получатель-дроп (fan-in)',
+}
+
+function ModelCard() {
+  const [m, setM] = useState<any>(null)
+  useEffect(() => { api('/v1/model').then(setM) }, [])
+  if (!m) return null
+  const weights = Object.entries(m.weights as Record<string, number>).sort((a, b) => b[1] - a[1])
+  const max = Math.max(...weights.map(([, w]) => Math.abs(w)))
+  return (
+    <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+      <div className="rounded-3xl bg-panel p-6 ring-1 ring-line">
+        <div className="mb-4 text-sm font-semibold">Вес каждого сигнала в модели</div>
+        <div className="space-y-2">
+          {weights.map(([f, w]) => (
+            <div key={f} className="grid grid-cols-[200px_1fr_50px] items-center gap-3 text-sm">
+              <span className="text-slate-300">{FEATURE_RU[f] ?? f}</span>
+              <div className="h-2 rounded bg-white/5"><div className={`h-full rounded ${w >= 0 ? 'bg-shield' : 'bg-sky-400'}`} style={{ width: `${(Math.abs(w) / max) * 100}%` }} /></div>
+              <span className="text-right tabular-nums text-slate-400">{w.toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-4 rounded-3xl bg-panel p-6 text-sm ring-1 ring-line">
+        <div><div className="text-xs uppercase tracking-widest text-slate-400">Версия</div><div className="font-mono">{m.version}</div></div>
+        <div><div className="text-xs uppercase tracking-widest text-slate-400">Тип</div>{m.type}</div>
+        <div>
+          <div className="text-xs uppercase tracking-widest text-slate-400">На отложенной синтетике</div>
+          ROC-AUC {m.metrics_on_synthetic_holdout.roc_auc} · PR-AUC {m.metrics_on_synthetic_holdout.pr_auc}
+        </div>
+        <div className="rounded-xl bg-amber-500/10 p-3 text-xs text-amber-200 ring-1 ring-amber-500/30">
+          Метрики на синтетических данных показывают только, что модель выучила заложенные паттерны. Реальная точность
+          измеряется на пилоте в теневом режиме на переводах банка.
+        </div>
+        <div className="text-xs text-slate-400">Поверх модели работают жёсткие правила: реестр мошенников, удалённый доступ во время звонка с незнакомцем, дроп-получатель, обязательный вопрос при переводе новому получателю во время звонка.</div>
+      </div>
     </div>
   )
 }

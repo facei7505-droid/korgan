@@ -61,6 +61,20 @@ def relevant_call(db: Session, customer_id: str, now: datetime) -> CallSignal | 
     return max(calls, key=lambda c: (not c.in_contacts, c.ended_at is None, _as_utc(c.started_at)))
 
 
+_KK_EXTRA = {
+    "unknown_caller_now": "Клиент дәл қазір контактілерде жоқ нөмірмен сөйлесіп отыр",
+    "recipient_in_registry": "Алушы алаяқтар базасында бар",
+    "caller_in_registry": "Клиент сөйлесіп отырған нөмір алаяқтар базасында бар",
+}
+
+
+def localize(reasons: list[dict], lang: str) -> list[dict]:
+    """Reasons are stored in Russian for the bank's staff; the customer sees them in their language."""
+    if lang != "kk":
+        return reasons
+    return [{**r, "text": _KK_EXTRA.get(r["code"]) or REASON_TEXT_KK.get(r["code"], r["text"])} for r in reasons]
+
+
 def bank_is_calling(db: Session, customer_id: str) -> bool:
     """True if the bank's own call centre has an open outbound call to this customer."""
     return db.scalar(select(BankCall.id).where(BankCall.customer_id == customer_id, BankCall.ended_at.is_(None))) is not None
@@ -90,7 +104,6 @@ def assess(
     behavior: Behavior,
     local_hour: int | None = None,
     now: datetime | None = None,
-    lang: str = "ru",
 ) -> Assessment:
     now = now or datetime.now(timezone.utc)
     call = relevant_call(db, customer.id, now)
@@ -141,16 +154,15 @@ def assess(
 
     explained = get_model().explain(feats)
     score = explained.probability
-    kk = lang == "kk"
-    texts = REASON_TEXT_KK if kk else REASON_TEXT
     reasons = [
-        {"code": f, "text": texts[f], "weight": round(c, 2)}
+        {"code": f, "text": REASON_TEXT[f], "weight": round(c, 2)}
         for f, c in sorted(explained.contributions.items(), key=lambda kv: -kv[1])
         if c > 0.25 and feats[f] > 0
     ][:5]
     for r in reasons:
         if r["code"] == "unknown_caller" and feats["call_active"]:
-            r["text"] = "Клиент дәл қазір контактілерде жоқ нөмірмен сөйлесіп отыр" if kk else "Клиент прямо сейчас говорит с номером, которого нет в контактах"
+            r["code"] = "unknown_caller_now"
+            r["text"] = "Клиент прямо сейчас говорит с номером, которого нет в контактах"
         if r["code"] == "recipient_fan_in_log":
             r["text"] += f" ({fan_in})"
 
@@ -170,17 +182,14 @@ def assess(
     if rcpt_ind:
         hits.append({"what": "recipient", "indicator_id": rcpt_ind.id, "source": rcpt_ind.source, "hits": rcpt_ind.hits})
         score = max(score, 0.9)
-        reasons.insert(0, {"code": "recipient_in_registry", "weight": 9.0, "text": (
-            f"Алушы алаяқтар базасында бар (дереккөз: {rcpt_ind.source})" if kk
-            else f"Получатель найден в базе мошенников (источник: {rcpt_ind.source}, совпадений: {rcpt_ind.hits})")})
+        reasons.insert(0, {"code": "recipient_in_registry", "weight": 9.0,
+                           "text": f"Получатель найден в базе мошенников (источник: {rcpt_ind.source}, совпадений: {rcpt_ind.hits})"})
     if call and call.counterparty_hash:
         caller_ind = registry_lookup(db, "phone", call.counterparty_hash)
         if caller_ind:
             hits.append({"what": "caller", "indicator_id": caller_ind.id, "source": caller_ind.source, "hits": caller_ind.hits})
             score = max(score, 0.88)
-            reasons.insert(0, {"code": "caller_in_registry", "weight": 8.0, "text": (
-                "Клиент сөйлесіп отырған нөмір алаяқтар базасында бар" if kk
-                else "Номер, с которым говорит клиент, есть в базе мошенников")})
+            reasons.insert(0, {"code": "caller_in_registry", "weight": 8.0, "text": "Номер, с которым говорит клиент, есть в базе мошенников"})
     if len(hits) == 2:
         score = max(score, 0.97)
 

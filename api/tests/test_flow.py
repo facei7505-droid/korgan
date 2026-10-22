@@ -35,7 +35,7 @@ def test_transfer_during_unknown_call_is_held_and_guardian_alerted(client):
     assert t["hold_until"]
     assert res["guardians_notified"] == ["grd_demo_arman"]
     codes = {r["code"] for r in t["reasons"]}
-    assert "call_active" in codes or "unknown_caller" in codes
+    assert {"call_active", "unknown_caller", "unknown_caller_now"} & codes
     # Guardian stops it.
     r = client.post(f"/v1/transfers/{t['id']}/guardian", headers=BOT, json={"approve": False})
     assert r.json()["status"] == "cancelled"

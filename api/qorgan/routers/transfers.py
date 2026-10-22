@@ -10,7 +10,7 @@ from ..events import emit
 from ..intel.extract import fingerprint, to_entity
 from ..models import Customer, KnownRecipient, Transfer
 from ..notify import telegram_guardian_alert
-from ..risk.engine import Behavior, assess
+from ..risk.engine import Behavior, assess, localize
 from ..schemas import ChallengeAnswer, GuardianAnswer, ScoreRequest
 from ..security import require
 
@@ -124,7 +124,7 @@ def score_transfer(
         raise HTTPException(422, f"invalid {req.recipient.kind}")
     rhash = fingerprint(ent.kind, ent.value)
 
-    a = assess(db, customer, req.amount, ent.kind, rhash, Behavior(**req.behavior.model_dump()), req.local_hour, lang=req.lang)
+    a = assess(db, customer, req.amount, ent.kind, rhash, Behavior(**req.behavior.model_dump()), req.local_hour)
     status = {"allow": "completed", "challenge": "pending_challenge", "hold": "held", "block": "held"}[a.decision]
     hold_until = None
     if a.decision == "hold":
@@ -143,8 +143,9 @@ def score_transfer(
     db.commit()
 
     return {
-        "transfer": serialize(t), "call": a.call, "registry_hits": a.registry_hits,
-        "customer_message": _customer_message(a.decision, req.lang), "guardians_notified": notified,
+        "transfer": {**serialize(t), "reasons": localize(t.reasons, req.lang)}, "call": a.call,
+        "registry_hits": a.registry_hits, "customer_message": _customer_message(a.decision, req.lang),
+        "guardians_notified": notified,
     }
 
 

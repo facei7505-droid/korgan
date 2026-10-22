@@ -104,3 +104,14 @@ def test_device_state_from_sdk_counts(client):
     client.post("/v1/signals/device", headers=BANK, json={"customer_id": DEMO_CUSTOMER, "remote_access_app": True})
     t = score(client, NEW_CARD, 10000)["transfer"]
     assert t["features"]["remote_control"] == 1.0 and t["decision"] in ("hold", "block")
+
+
+def test_staff_see_russian_when_customer_uses_kazakh(client):
+    unknown_call(client)
+    r = client.post("/v1/transfers/score", headers=BANK, json={
+        "customer_id": DEMO_CUSTOMER, "amount": 800000, "recipient": {"kind": "card", "value": NEW_CARD},
+        "behavior": {"max_pause_ms": 14000, "pasted_recipient": True}, "lang": "kk",
+    }).json()
+    stored = client.get(f"/v1/transfers/{r['transfer']['id']}", headers=BANK).json()
+    assert any("Клиент прямо сейчас" in x["text"] for x in stored["reasons"])
+    assert not any("Клиент прямо сейчас" in x["text"] for x in r["transfer"]["reasons"])

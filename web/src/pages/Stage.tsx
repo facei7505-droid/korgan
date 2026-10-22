@@ -18,7 +18,7 @@ export default function Stage() {
   return (
     <div className="mx-auto flex min-h-full max-w-[1500px] flex-wrap items-start justify-center gap-8 p-6">
       <Phone label="Бабушка · приложение банка"><BankApp demo={demo} /></Phone>
-      <Phone label="Внук Арман · телефон" tone="dark"><GuardianApp /></Phone>
+      <Phone label="Внук Арман · телефон" tone="dark"><GuardianApp customerId={demo.customer_id} /></Phone>
       <div className="w-[360px] max-w-full space-y-4">
         <div className="rounded-3xl bg-panel p-5 ring-1 ring-line">
           <div className="mb-4 flex items-center justify-between">

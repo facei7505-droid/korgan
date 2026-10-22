@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, CHANNEL_LABEL, kzt, type CallInfo, type DemoInfo, type Reason, type Transfer } from '../lib/api'
 import { useEvents } from '../lib/events'
 
+type Lang = 'ru' | 'kk'
 type ScoreResponse = {
   transfer: Transfer
   call: CallInfo | null
@@ -9,6 +10,35 @@ type ScoreResponse = {
   guardians_notified: string[]
 }
 type ActiveCall = { id: string; channel: string; counterparty: string | null; in_contacts: boolean; started_at: string }
+
+// Kazakh strings: reviewed for clarity; have a native speaker proofread before production.
+const T = {
+  ru: {
+    hello: 'Сәлеметсіз бе,', on: '🛡️ Qorgan включён', card: 'Пенсионная карта', transfer: 'Перевод', payments: 'Платежи',
+    loans: 'Кредиты', favs: 'Избранное', grandson: 'Арман (внук)', back: '← Назад', toCard: 'Перевод на карту',
+    cardNo: 'Номер карты получателя', amount: 'Сумма', checking: 'Проверяем…', send: 'Перевести', badCard: 'Проверьте номер карты',
+    offline: 'Нет связи с сервером', contact: 'контакт', unknownNo: 'неизвестный номер',
+    bankNot: 'Банк вам сейчас НЕ звонит. Если говорят «из банка», это мошенник', bankYes: '✓ Это настоящий звонок банка',
+    why: 'Почему мы остановили:', done: 'На главную', sent: 'Перевод выполнен', guardianOk: 'Доверенный человек подтвердил перевод',
+    safe: 'Деньги остались у вас', guardianStopped: 'Арман остановил перевод и сейчас вам позвонит.', cancelled: 'Перевод отменён.',
+    advice: 'Положите трубку. Сотрудники банка и полиции никогда не просят переводить деньги, называть коды из SMS или устанавливать приложения.',
+    yesDictated: 'Да, мне подсказывают по телефону', noSelf: 'Нет, я перевожу сам(а)', notified: 'Арман получил уведомление',
+    review: 'ждём проверку банка', cancel: 'Отменить перевод', confirm: 'Пауза прошла: всё равно перевести',
+  },
+  kk: {
+    hello: 'Сәлеметсіз бе,', on: '🛡️ Qorgan қосулы', card: 'Зейнетақы картасы', transfer: 'Аударым', payments: 'Төлемдер',
+    loans: 'Несиелер', favs: 'Таңдаулылар', grandson: 'Арман (немере)', back: '← Артқа', toCard: 'Картаға аудару',
+    cardNo: 'Алушының карта нөмірі', amount: 'Сома', checking: 'Тексеріп жатырмыз…', send: 'Аудару', badCard: 'Карта нөмірін тексеріңіз',
+    offline: 'Сервермен байланыс жоқ', contact: 'контакт', unknownNo: 'белгісіз нөмір',
+    bankNot: 'Банк сізге қазір қоңырау шалып тұрған ЖОҚ. «Банктен» десе, ол алаяқ', bankYes: '✓ Бұл банктің нақты қоңырауы',
+    why: 'Неге тоқтаттық:', done: 'Басты бетке', sent: 'Аударым орындалды', guardianOk: 'Сенімді адам аударымды растады',
+    safe: 'Ақшаңыз өзіңізде қалды', guardianStopped: 'Арман аударымды тоқтатты және қазір сізге қоңырау шалады.', cancelled: 'Аударым тоқтатылды.',
+    advice: 'Телефонды қойыңыз. Банк пен полиция қызметкерлері ешқашан ақша аударуды, SMS кодын айтуды немесе қосымша орнатуды сұрамайды.',
+    yesDictated: 'Иә, маған телефоннан айтып жатыр', noSelf: 'Жоқ, өзім аударып жатырмын', notified: 'Арманға хабарлама жіберілді',
+    review: 'банк тексеруін күтудеміз', cancel: 'Аударымды болдырмау', confirm: 'Үзіліс бітті: бәрібір аудару',
+  },
+}
+type Dict = (typeof T)['ru']
 
 const fmtCard = (v: string) => v.replace(/\D/g, '').slice(0, 19).replace(/(\d{4})(?=\d)/g, '$1 ')
 
@@ -39,6 +69,8 @@ function useBehavior() {
 }
 
 export function BankApp({ demo }: { demo: DemoInfo }) {
+  const [lang, setLang] = useState<Lang>('ru')
+  const t = T[lang]
   const [screen, setScreen] = useState<'home' | 'transfer' | 'result'>('home')
   const [card, setCard] = useState('')
   const [amount, setAmount] = useState('')
@@ -46,30 +78,39 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
   const [busy, setBusy] = useState(false)
   const [res, setRes] = useState<ScoreResponse | null>(null)
   const [call, setCall] = useState<ActiveCall | null>(null)
+  const [bankCalling, setBankCalling] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [err, setErr] = useState('')
   const beh = useBehavior()
+  const attempt = useRef('')
+
+  const checkBank = () =>
+    api<{ bank_is_calling: boolean }>(`/v1/customers/${demo.customer_id}/call-check`).then((r) => setBankCalling(r.bank_is_calling)).catch(() => {})
 
   useEffect(() => {
     api<any[]>(`/v1/customers/${demo.customer_id}/calls`).then((calls) => setCall(calls.find((c) => !c.ended_at) ?? null)).catch(() => {})
+    checkBank()
   }, [demo.customer_id])
 
   useEffect(() => {
     if (!call) return
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - new Date(call.started_at).getTime()) / 1000)), 1000)
-    return () => clearInterval(t)
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - new Date(call.started_at).getTime()) / 1000)))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
   }, [call])
 
   useEvents((e) => {
-    if (e.payload?.customer_id !== demo.customer_id && e.type !== 'demo.reset') return
     if (e.type === 'call.started') setCall(e.payload)
     if (e.type === 'call.ended') setCall((c) => (c?.id === e.payload.id ? null : c))
-    if (e.type === 'demo.reset') { setCall(null); setScreen('home'); setRes(null) }
+    if (e.type.startsWith('bank_call.')) checkBank()
+    if (e.type === 'demo.reset') { setCall(null); setBankCalling(false); setScreen('home'); setRes(null) }
     if (e.type === 'transfer.updated') setRes((r) => (r && r.transfer.id === e.payload.id ? { ...r, transfer: { ...r.transfer, ...e.payload } } : r))
-  })
+  }, demo.customer_id)
 
   const openTransfer = (prefill?: string) => {
     beh.reset()
+    attempt.current = crypto.randomUUID?.() ?? String(Date.now())
     setCard(prefill ? fmtCard(prefill) : '')
     setSaved(Boolean(prefill))
     setAmount('')
@@ -81,32 +122,30 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
     setBusy(true)
     setErr('')
     try {
+      const b = beh.snapshot()
       const r = await api<ScoreResponse>('/v1/transfers/score', {
+        headers: { 'Idempotency-Key': `${attempt.current}:${card}:${amount}` },
         body: {
           customer_id: demo.customer_id,
           amount: Number(amount.replace(/\D/g, '')),
           recipient: { kind: 'card', value: card },
-          behavior: { ...beh.snapshot(), pasted_recipient: beh.snapshot().pasted_recipient && !saved },
+          behavior: { ...b, pasted_recipient: b.pasted_recipient && !saved },
+          lang,
         },
       })
       setRes(r)
       setScreen('result')
     } catch (e: any) {
-      setErr(e.status === 422 ? 'Проверьте номер карты' : 'Нет связи с сервером')
+      setErr(e.status === 422 ? t.badCard : t.offline)
     } finally {
       setBusy(false)
     }
   }
 
-  const answer = async (dictated: boolean) => {
+  const act = async (path: string, body?: object) => {
     if (!res) return
-    const t = await api<Transfer>(`/v1/transfers/${res.transfer.id}/challenge`, { body: { dictated } })
-    setRes({ ...res, transfer: t })
-  }
-  const cancel = async () => {
-    if (!res) return
-    const t = await api<Transfer>(`/v1/transfers/${res.transfer.id}/cancel`, { method: 'POST' })
-    setRes({ ...res, transfer: t })
+    const tr = await api<Transfer>(`/v1/transfers/${res.transfer.id}/${path}`, body ? { body } : { method: 'POST' })
+    setRes({ ...res, transfer: tr })
   }
 
   const mm = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`
@@ -115,10 +154,17 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
     <div className="flex h-full flex-col">
       <div className="h-9 shrink-0" />
       {call && (
-        <div className="mx-3 mb-1 flex items-center gap-2 rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">
-          <span className="animate-ring">📞</span>
-          <span className="truncate">{CHANNEL_LABEL[call.channel] ?? 'Звонок'} · {call.in_contacts ? 'контакт' : call.counterparty ?? 'неизвестный номер'}</span>
-          <span className="ml-auto tabular-nums">{mm}</span>
+        <div className="mx-3 mb-1 space-y-1">
+          <div className="flex items-center gap-2 rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">
+            <span className="animate-ring">📞</span>
+            <span className="truncate">{CHANNEL_LABEL[call.channel] ?? 'Звонок'} · {call.in_contacts ? t.contact : call.counterparty ?? t.unknownNo}</span>
+            <span className="ml-auto tabular-nums">{mm}</span>
+          </div>
+          {!call.in_contacts && (
+            <div className={`rounded-xl px-3 py-1.5 text-[11px] font-semibold leading-snug ${bankCalling ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+              {bankCalling ? t.bankYes : `⚠️ ${t.bankNot}`}
+            </div>
+          )}
         </div>
       )}
 
@@ -126,26 +172,31 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-6">
           <div className="flex items-center justify-between pt-2">
             <div>
-              <div className="text-xs text-slate-500">Сәлеметсіз бе,</div>
+              <div className="text-xs text-slate-500">{t.hello}</div>
               <div className="text-lg font-bold">Бибигуль</div>
             </div>
-            <div className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">🛡️ Qorgan включён</div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setLang(lang === 'ru' ? 'kk' : 'ru')} className="rounded-full bg-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700">
+                {lang === 'ru' ? 'ҚАЗ' : 'РУС'}
+              </button>
+              <div className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">{t.on}</div>
+            </div>
           </div>
           <div className="rounded-3xl bg-gradient-to-br from-slate-900 to-slate-700 p-5 text-white shadow-lg">
-            <div className="text-xs opacity-70">Пенсионная карта</div>
+            <div className="text-xs opacity-70">{t.card}</div>
             <div className="mt-1 text-3xl font-extrabold tracking-tight">1 245 300 ₸</div>
             <div className="mt-6 text-xs tracking-widest opacity-60">•••• 4471</div>
           </div>
           <div className="grid grid-cols-3 gap-3 text-center text-xs font-medium">
-            <button onClick={() => openTransfer()} className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200 active:scale-95">💸<br />Перевод</button>
-            <div className="rounded-2xl bg-white p-3 text-slate-400 shadow-sm ring-1 ring-slate-200">🧾<br />Платежи</div>
-            <div className="rounded-2xl bg-white p-3 text-slate-400 shadow-sm ring-1 ring-slate-200">🏦<br />Кредиты</div>
+            <button onClick={() => openTransfer()} className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200 active:scale-95">💸<br />{t.transfer}</button>
+            <div className="rounded-2xl bg-white p-3 text-slate-400 shadow-sm ring-1 ring-slate-200">🧾<br />{t.payments}</div>
+            <div className="rounded-2xl bg-white p-3 text-slate-400 shadow-sm ring-1 ring-slate-200">🏦<br />{t.loans}</div>
           </div>
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Избранное</div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{t.favs}</div>
             <button onClick={() => openTransfer(demo.family_card)} className="flex w-full items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-slate-200 active:scale-[.98]">
               <div className="grid h-10 w-10 place-items-center rounded-full bg-sky-100 text-lg">👦</div>
-              <div><div className="text-sm font-semibold">Арман (внук)</div><div className="text-xs text-slate-500">•••• {demo.family_card.slice(-4)}</div></div>
+              <div><div className="text-sm font-semibold">{t.grandson}</div><div className="text-xs text-slate-500">•••• {demo.family_card.slice(-4)}</div></div>
             </button>
           </div>
         </div>
@@ -153,9 +204,9 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
 
       {screen === 'transfer' && (
         <div className="flex flex-1 flex-col gap-4 px-5 pb-6">
-          <button onClick={() => setScreen('home')} className="self-start pt-2 text-sm text-slate-500">← Назад</button>
-          <div className="text-xl font-bold">Перевод на карту</div>
-          <label className="text-xs font-medium text-slate-500">Номер карты получателя
+          <button onClick={() => setScreen('home')} className="self-start pt-2 text-sm text-slate-500">{t.back}</button>
+          <div className="text-xl font-bold">{t.toCard}</div>
+          <label className="text-xs font-medium text-slate-500">{t.cardNo}
             <input
               inputMode="numeric" value={card} placeholder="0000 0000 0000 0000"
               onKeyDown={beh.key} onPaste={beh.paste}
@@ -163,7 +214,7 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
               className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-lg tracking-wider text-slate-900 outline-none focus:border-emerald-500"
             />
           </label>
-          <label className="text-xs font-medium text-slate-500">Сумма
+          <label className="text-xs font-medium text-slate-500">{t.amount}
             <input
               inputMode="numeric" value={amount} placeholder="0 ₸" onKeyDown={beh.key}
               onChange={(e) => setAmount(new Intl.NumberFormat('ru-RU').format(Number(e.target.value.replace(/\D/g, '') || 0)).replace(/^0$/, ''))}
@@ -173,101 +224,107 @@ export function BankApp({ demo }: { demo: DemoInfo }) {
           {err && <div className="text-sm text-red-600">{err}</div>}
           <button disabled={busy || card.replace(/\D/g, '').length < 16 || !amount} onClick={submit}
             className="mt-auto rounded-2xl bg-emerald-600 py-4 text-base font-bold text-white disabled:opacity-40 active:scale-[.98]">
-            {busy ? 'Проверяем…' : 'Перевести'}
+            {busy ? t.checking : t.send}
           </button>
         </div>
       )}
 
-      {screen === 'result' && res && <Result res={res} onAnswer={answer} onCancel={cancel} onDone={() => setScreen('home')} />}
+      {screen === 'result' && res && (
+        <Result res={res} t={t}
+          onAnswer={(dictated) => act('challenge', { dictated })}
+          onCancel={() => act('cancel')} onConfirm={() => act('confirm')} onDone={() => setScreen('home')} />
+      )}
     </div>
   )
 }
 
-function Reasons({ reasons }: { reasons: Reason[] }) {
+function Reasons({ reasons, t }: { reasons: Reason[]; t: Dict }) {
   if (!reasons.length) return null
   return (
     <div className="rounded-2xl bg-white/70 p-3 text-left text-xs ring-1 ring-black/5">
-      <div className="mb-1 font-semibold text-slate-700">Почему мы остановили:</div>
+      <div className="mb-1 font-semibold text-slate-700">{t.why}</div>
       <ul className="space-y-1 text-slate-600">{reasons.slice(0, 4).map((r) => <li key={r.code}>• {r.text}</li>)}</ul>
     </div>
   )
 }
 
-function Countdown({ until }: { until: string }) {
+function useCountdown(until: string | null) {
   const [left, setLeft] = useState(0)
   useEffect(() => {
+    if (!until) return
     const tick = () => setLeft(Math.max(0, Math.floor((new Date(until).getTime() - Date.now()) / 1000)))
     tick()
-    const t = setInterval(tick, 1000)
-    return () => clearInterval(t)
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
   }, [until])
-  return <span className="tabular-nums">{Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</span>
+  return left
 }
 
-function Result({ res, onAnswer, onCancel, onDone }: { res: ScoreResponse; onAnswer: (d: boolean) => void; onCancel: () => void; onDone: () => void }) {
-  const t = res.transfer
-  const done = (
-    <button onClick={onDone} className="mt-auto w-full rounded-2xl bg-slate-900 py-4 font-bold text-white">На главную</button>
-  )
+function Result({ res, t, onAnswer, onCancel, onConfirm, onDone }: {
+  res: ScoreResponse; t: Dict; onAnswer: (d: boolean) => void; onCancel: () => void; onConfirm: () => void; onDone: () => void
+}) {
+  const tr = res.transfer
+  const left = useCountdown(tr.hold_until)
+  const done = <button onClick={onDone} className="mt-auto w-full rounded-2xl bg-slate-900 py-4 font-bold text-white">{t.done}</button>
 
-  if (t.status === 'completed' || t.status === 'released')
+  if (tr.status === 'completed' || tr.status === 'released')
     return (
       <div className="flex flex-1 flex-col items-center gap-3 px-6 pb-6 pt-16 text-center">
         <div className="grid h-20 w-20 place-items-center rounded-full bg-emerald-100 text-4xl">✓</div>
-        <div className="text-2xl font-bold">{kzt(t.amount)}</div>
-        <div className="text-slate-500">Перевод выполнен · {t.recipient}</div>
-        {t.status === 'released' && <div className="text-xs text-slate-500">Доверенный человек подтвердил перевод</div>}
+        <div className="text-2xl font-bold">{kzt(tr.amount)}</div>
+        <div className="text-slate-500">{t.sent} · {tr.recipient}</div>
+        {tr.resolution === 'guardian_approved' && <div className="text-xs text-slate-500">{t.guardianOk}</div>}
         {done}
       </div>
     )
 
-  if (t.status === 'cancelled')
+  if (tr.status === 'cancelled')
     return (
       <div className="flex flex-1 flex-col items-center gap-3 px-6 pb-6 pt-14 text-center">
         <div className="grid h-20 w-20 place-items-center rounded-full bg-emerald-100 text-4xl">🛡️</div>
-        <div className="text-xl font-bold">Деньги остались у вас</div>
-        <div className="text-sm text-slate-600">
-          {t.resolution === 'guardian_rejected' ? 'Арман остановил перевод и сейчас вам позвонит.' : 'Перевод отменён.'}
-        </div>
-        <div className="rounded-2xl bg-amber-50 p-4 text-left text-sm text-amber-900 ring-1 ring-amber-200">
-          Положите трубку. Сотрудники банка и полиции никогда не просят переводить деньги, называть коды из SMS или устанавливать приложения.
-        </div>
+        <div className="text-xl font-bold">{t.safe}</div>
+        <div className="text-sm text-slate-600">{tr.resolution === 'guardian_rejected' ? t.guardianStopped : t.cancelled}</div>
+        <div className="rounded-2xl bg-amber-50 p-4 text-left text-sm text-amber-900 ring-1 ring-amber-200">{t.advice}</div>
         {done}
       </div>
     )
 
-  if (t.status === 'pending_challenge')
+  if (tr.status === 'pending_challenge')
     return (
-      <div className="flex flex-1 flex-col gap-4 bg-amber-50 px-6 pb-6 pt-10">
+      <div className="flex flex-1 flex-col gap-4 overflow-y-auto bg-amber-50 px-6 pb-6 pt-10">
         <div className="text-5xl">✋</div>
         <div className="text-2xl font-extrabold leading-tight text-amber-950">{res.customer_message?.title}</div>
         <div className="text-sm text-amber-900">{res.customer_message?.body}</div>
-        <Reasons reasons={t.reasons} />
+        <Reasons reasons={tr.reasons} t={t} />
         <div className="mt-auto grid gap-3">
-          <button onClick={() => onAnswer(true)} className="rounded-2xl bg-red-600 py-4 font-bold text-white">Да, мне подсказывают по телефону</button>
-          <button onClick={() => onAnswer(false)} className="rounded-2xl bg-white py-4 font-semibold text-slate-700 ring-1 ring-slate-300">Нет, я перевожу сам(а)</button>
+          <button onClick={() => onAnswer(true)} className="rounded-2xl bg-red-600 py-4 font-bold text-white">{t.yesDictated}</button>
+          <button onClick={() => onAnswer(false)} className="rounded-2xl bg-white py-4 font-semibold text-slate-700 ring-1 ring-slate-300">{t.noSelf}</button>
         </div>
       </div>
     )
 
-  // held: hold or block
-  const block = t.decision === 'block'
+  const block = tr.decision === 'block'
   return (
-    <div className={`flex flex-1 flex-col gap-4 px-6 pb-6 pt-10 ${block ? 'bg-red-50' : 'bg-amber-50'}`}>
+    <div className={`flex flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6 pt-10 ${block ? 'bg-red-50' : 'bg-amber-50'}`}>
       <div className="text-5xl">{block ? '⛔' : '⏸️'}</div>
       <div className={`text-2xl font-extrabold leading-tight ${block ? 'text-red-950' : 'text-amber-950'}`}>{res.customer_message?.title}</div>
-      {!block && t.hold_until && (
-        <div className="text-4xl font-black text-amber-700"><Countdown until={t.hold_until} /></div>
+      {!block && tr.hold_until && (
+        <div className="text-4xl font-black tabular-nums text-amber-700">{Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</div>
       )}
       <div className={`text-sm ${block ? 'text-red-900' : 'text-amber-900'}`}>{res.customer_message?.body}</div>
-      <Reasons reasons={t.reasons} />
+      <Reasons reasons={tr.reasons} t={t} />
       {res.guardians_notified.length > 0 && (
         <div className="flex items-center gap-2 rounded-2xl bg-white p-3 text-sm ring-1 ring-black/5">
-          <span className="text-xl">👦</span> Арман получил уведомление
-          {t.resolution === 'guardian_approved_pending_bank_review' && <span className="ml-auto text-xs text-slate-500">ждём проверку банка</span>}
+          <span className="text-xl">👦</span> {t.notified}
+          {tr.resolution === 'guardian_approved_pending_bank_review' && <span className="ml-auto text-xs text-slate-500">{t.review}</span>}
         </div>
       )}
-      <button onClick={onCancel} className="mt-auto rounded-2xl bg-slate-900 py-4 font-bold text-white">Отменить перевод</button>
+      <div className="mt-auto grid gap-2">
+        {!block && tr.hold_until && left === 0 && (
+          <button onClick={onConfirm} className="rounded-2xl bg-white py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-300">{t.confirm}</button>
+        )}
+        <button onClick={onCancel} className="rounded-2xl bg-slate-900 py-4 font-bold text-white">{t.cancel}</button>
+      </div>
     </div>
   )
 }

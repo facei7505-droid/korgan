@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { API_KEY, API_URL, type QEvent } from './api'
 
-/** Subscribe to the live event stream (Server-Sent Events). */
-export function useEvents(onEvent: (e: QEvent) => void) {
+/** Subscribe to the live event stream (Server-Sent Events), optionally only one customer's events. */
+export function useEvents(onEvent: (e: QEvent) => void, customerId?: string) {
   const handler = useRef(onEvent)
   handler.current = onEvent
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    const es = new EventSource(`${API_URL}/v1/events/stream?key=${encodeURIComponent(API_KEY)}`)
+    const q = new URLSearchParams({ key: API_KEY, ...(customerId ? { customer_id: customerId } : {}) })
+    const es = new EventSource(`${API_URL}/v1/events/stream?${q}`)
     es.onopen = () => setConnected(true)
     es.onerror = () => setConnected(false)
     es.onmessage = (m) => {
@@ -19,7 +20,7 @@ export function useEvents(onEvent: (e: QEvent) => void) {
       }
     }
     return () => es.close()
-  }, [])
+  }, [customerId])
   return connected
 }
 

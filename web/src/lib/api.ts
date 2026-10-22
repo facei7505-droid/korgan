@@ -12,12 +12,15 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; params?: Record<string, string> } = {}): Promise<T> {
+export async function api<T = any>(
+  path: string,
+  opts: { method?: string; body?: unknown; params?: Record<string, string>; headers?: Record<string, string> } = {},
+): Promise<T> {
   const url = new URL(API_URL + path)
   Object.entries(opts.params ?? {}).forEach(([k, v]) => url.searchParams.set(k, v))
   const res = await fetch(url, {
     method: opts.method ?? (opts.body ? 'POST' : 'GET'),
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY, ...opts.headers },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   })
   if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText)
