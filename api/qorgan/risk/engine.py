@@ -3,7 +3,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import BankCall, CallSignal, Customer, Indicator, KnownRecipient, Transfer
@@ -75,24 +75,34 @@ def localize(reasons: list[dict], lang: str) -> list[dict]:
     return [{**r, "text": _KK_EXTRA.get(r["code"]) or REASON_TEXT_KK.get(r["code"], r["text"])} for r in reasons]
 
 
-def bank_is_calling(db: Session, customer_id: str) -> bool:
-    """True if the bank's own call centre has an open outbound call to this customer."""
-    return db.scalar(select(BankCall.id).where(BankCall.customer_id == customer_id, BankCall.ended_at.is_(None))) is not None
+def registry_lookup_many(db: Session, keys: list[tuple[str, str]]) -> dict[tuple[str, str], Indicator]:
+    """Several (kind, value_hash) lookups in one query."""
+    keys = [k for k in keys if k[1]]
+    if not keys:
+        return {}
+    rows = db.scalars(select(Indicator).where(or_(*(and_(Indicator.kind == k, Indicator.value_hash == h) for k, h in keys))))
+    return {(i.kind, i.value_hash): i for i in rows}
 
 
-def recipient_fan_in(db: Session, recipient_hash: str, customer_id: str, now: datetime) -> int:
-    """Distinct other customers who sent money to this recipient in the last 24h (mule pattern)."""
-    return db.scalar(
-        select(func.count(func.distinct(Transfer.customer_id))).where(
+def customer_context(db: Session, customer_id: str, recipient_hash: str, now: datetime) -> tuple[bool, int, bool]:
+    """(recipient already known, recipient fan-in, bank is calling) in one round trip."""
+    known = (
+        select(KnownRecipient.id)
+        .where(KnownRecipient.customer_id == customer_id, KnownRecipient.recipient_hash == recipient_hash)
+        .exists()
+    )
+    fan_in = (
+        select(func.count(func.distinct(Transfer.customer_id)))
+        .where(
             Transfer.recipient_hash == recipient_hash,
             Transfer.customer_id != customer_id,
             Transfer.created_at >= now - FAN_IN_WINDOW,
         )
-    ) or 0
-
-
-def registry_lookup(db: Session, kind: str, value_hash: str) -> Indicator | None:
-    return db.scalar(select(Indicator).where(Indicator.kind == kind, Indicator.value_hash == value_hash))
+        .scalar_subquery()
+    )
+    calling = select(BankCall.id).where(BankCall.customer_id == customer_id, BankCall.ended_at.is_(None)).exists()
+    row = db.execute(select(known.label("known"), fan_in.label("fan_in"), calling.label("calling"))).one()
+    return bool(row.known), int(row.fan_in or 0), bool(row.calling)
 
 
 def assess(
@@ -107,6 +117,7 @@ def assess(
 ) -> Assessment:
     now = now or datetime.now(timezone.utc)
     call = relevant_call(db, customer.id, now)
+    known, fan_in, bank_calling = customer_context(db, customer.id, recipient_hash, now)
 
     feats: dict[str, float] = {f: 0.0 for f in REASON_TEXT}
     call_info = None
@@ -130,18 +141,12 @@ def assess(
             "minutes_since_end": round(since_end, 1),
             "in_contacts": call.in_contacts,
             "counterparty": call.counterparty_masked,
-            "bank_is_calling": bank_is_calling(db, customer.id),
+            "bank_is_calling": bank_calling,
         }
 
-    known = db.scalar(
-        select(KnownRecipient).where(
-            KnownRecipient.customer_id == customer.id, KnownRecipient.recipient_hash == recipient_hash
-        )
-    )
-    fan_in = recipient_fan_in(db, recipient_hash, customer.id, now)
     hour = local_hour if local_hour is not None else (now + timedelta(hours=5)).hour  # Asia/Almaty, UTC+5
     feats.update(
-        recipient_new=float(known is None),
+        recipient_new=float(not known),
         amount_ratio_log=math.log(max(amount / max(customer.typical_amount, 1), 0.05)),
         elderly=float(customer.age >= 60),
         hesitation=behavior.hesitation(),
@@ -178,14 +183,16 @@ def assess(
 
     # Hard rules from threat intelligence (Apa, reports, other banks).
     hits: list[dict] = []
-    rcpt_ind = registry_lookup(db, recipient_kind, recipient_hash)
+    caller_key = ("phone", call.counterparty_hash) if call and call.counterparty_hash else None
+    found = registry_lookup_many(db, [(recipient_kind, recipient_hash)] + ([caller_key] if caller_key else []))
+    rcpt_ind = found.get((recipient_kind, recipient_hash))
     if rcpt_ind:
         hits.append({"what": "recipient", "indicator_id": rcpt_ind.id, "source": rcpt_ind.source, "hits": rcpt_ind.hits})
         score = max(score, 0.9)
         reasons.insert(0, {"code": "recipient_in_registry", "weight": 9.0,
                            "text": f"Получатель найден в базе мошенников (источник: {rcpt_ind.source}, совпадений: {rcpt_ind.hits})"})
-    if call and call.counterparty_hash:
-        caller_ind = registry_lookup(db, "phone", call.counterparty_hash)
+    if caller_key:
+        caller_ind = found.get(caller_key)
         if caller_ind:
             hits.append({"what": "caller", "indicator_id": caller_ind.id, "source": caller_ind.source, "hits": caller_ind.hits})
             score = max(score, 0.88)

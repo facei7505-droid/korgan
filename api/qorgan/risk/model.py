@@ -8,6 +8,7 @@ Bootstrapped on a synthetic dataset that encodes published patterns of
 authorised push payment (APP) fraud. In a pilot it is retrained on the bank's
 labelled transfers via `train(X, y)`.
 """
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -87,6 +88,8 @@ class RiskModel:
     def train(self, X: np.ndarray, y: np.ndarray) -> None:
         X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
         self.clf.fit(self.scaler.fit_transform(X_tr), y_tr)
+        self._mean, self._scale = self.scaler.mean_, self.scaler.scale_
+        self._coef, self._intercept = self.clf.coef_[0], float(self.clf.intercept_[0])
         p = self.clf.predict_proba(self.scaler.transform(X_te))[:, 1]
         self.metrics = {
             "roc_auc": round(float(roc_auc_score(y_te, p)), 4),
@@ -105,11 +108,12 @@ class RiskModel:
         }
 
     def explain(self, x: dict[str, float]) -> Explained:
-        vec = np.array([[float(x.get(f, 0.0)) for f in FEATURES]])
-        xs = self.scaler.transform(vec)
-        p = float(self.clf.predict_proba(xs)[0, 1])
-        contrib = {f: float(c) for f, c in zip(FEATURES, (xs[0] * self.clf.coef_[0]))}
-        return Explained(p, contrib)
+        # Plain numpy on the hot path: same maths as scaler.transform + predict_proba, without
+        # sklearn's per-call input validation (~10x faster for a single row).
+        xs = (np.fromiter((x.get(f, 0.0) for f in FEATURES), float, len(FEATURES)) - self._mean) / self._scale
+        parts = xs * self._coef
+        p = float(1.0 / (1.0 + math.exp(-(parts.sum() + self._intercept))))
+        return Explained(p, dict(zip(FEATURES, parts.tolist())))
 
 
 def synthetic_dataset(n: int = 12000, fraud_rate: float = 0.12, seed: int = 7) -> tuple[np.ndarray, np.ndarray]:

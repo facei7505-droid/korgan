@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .db import engine, is_postgres
-from .models import Event
+from .models import Event, utcnow
 
 log = logging.getLogger("qorgan.events")
 CHANNEL = "qorgan_events"
@@ -63,19 +63,41 @@ bus = Bus()
 
 
 def emit(db: Session, type_: str, payload: dict[str, Any]) -> Event:
-    """Persist an event; it reaches live subscribers when (and only if) the caller commits."""
+    """Record an event; it is written with the caller's commit and reaches live subscribers only then.
+
+    No flush here: all events of a request are inserted in the commit's single flush and announced
+    with one NOTIFY round trip (see `_before_commit`).
+    """
     payload = json.loads(json.dumps(payload, default=str, ensure_ascii=False))
-    ev = Event(type=type_, payload=payload)
+    ev = Event(type=type_, payload=payload, created_at=utcnow())
     db.add(ev)
-    db.flush()
-    message = json.dumps({"id": ev.id, "type": type_, "payload": payload, "created_at": ev.created_at}, default=str, ensure_ascii=False)
-    if is_postgres:
-        if len(message.encode()) > NOTIFY_LIMIT:  # rare: send a stub, clients refetch from /v1/events
-            message = json.dumps({"id": ev.id, "type": type_, "payload": {"customer_id": payload.get("customer_id"), "truncated": True}, "created_at": str(ev.created_at)})
-        db.execute(text("SELECT pg_notify(:c, :m)"), {"c": CHANNEL, "m": message})
-    else:
-        db.info.setdefault("qorgan_pending", []).append(message)
+    db.info.setdefault("qorgan_events", []).append(ev)
     return ev
+
+
+def _message(ev: Event) -> str:
+    message = json.dumps({"id": ev.id, "type": ev.type, "payload": ev.payload, "created_at": ev.created_at}, default=str, ensure_ascii=False)
+    if is_postgres and len(message.encode()) > NOTIFY_LIMIT:  # rare: send a stub, clients refetch from /v1/events
+        stub = {"customer_id": ev.payload.get("customer_id"), "truncated": True}
+        message = json.dumps({"id": ev.id, "type": ev.type, "payload": stub, "created_at": ev.created_at}, default=str)
+    return message
+
+
+@sa_event.listens_for(Session, "before_commit")
+def _before_commit(session: Session) -> None:
+    events = session.info.pop("qorgan_events", None)
+    if not events:
+        return
+    session.flush()  # assigns event ids
+    messages = [_message(ev) for ev in events]
+    if is_postgres:
+        # Delivered by Postgres on COMMIT, dropped on ROLLBACK.
+        session.execute(
+            text("SELECT pg_notify(:c, m) FROM unnest(CAST(:ms AS text[])) AS m"),
+            {"c": CHANNEL, "ms": messages},
+        )
+    else:
+        session.info.setdefault("qorgan_pending", []).extend(messages)
 
 
 @sa_event.listens_for(Session, "after_commit")
@@ -87,6 +109,7 @@ def _after_commit(session: Session) -> None:
 @sa_event.listens_for(Session, "after_rollback")
 def _after_rollback(session: Session) -> None:
     session.info.pop("qorgan_pending", None)
+    session.info.pop("qorgan_events", None)
 
 
 def start_listener(stop: threading.Event) -> threading.Thread | None:

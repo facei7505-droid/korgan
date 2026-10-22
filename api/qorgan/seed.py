@@ -1,4 +1,5 @@
 """Demo data: one protected customer, her guardian, payment history and a few known scam indicators."""
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .db import Base, engine
@@ -40,7 +41,13 @@ def seed(db: Session) -> None:
 
 
 def reset(db: Session) -> None:
+    """Wipe all data (schema untouched, so migrations stay in charge of it) and seed the demo again."""
     db.close()
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    tables = Base.metadata.sorted_tables
+    with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("TRUNCATE " + ", ".join(t.name for t in tables) + " RESTART IDENTITY CASCADE"))
+        else:
+            for t in reversed(tables):
+                conn.execute(t.delete())
     seed(db)

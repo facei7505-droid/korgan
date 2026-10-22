@@ -7,7 +7,7 @@ form is kept for display.
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -162,12 +162,14 @@ class CaseIndicator(Base):
 
 class Transfer(Base):
     __tablename__ = "transfers"
+    # Fan-in check: "who paid this card in the last 24h" is an index range scan.
+    __table_args__ = (Index("ix_transfers_recipient_hash_created_at", "recipient_hash", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("trf"))
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), index=True)
     amount: Mapped[float] = mapped_column(Float)
     recipient_kind: Mapped[str] = mapped_column(String(16))
-    recipient_hash: Mapped[str] = mapped_column(String(64), index=True)
+    recipient_hash: Mapped[str] = mapped_column(String(64))
     recipient_masked: Mapped[str] = mapped_column(String(64))
     score: Mapped[float] = mapped_column(Float)
     decision: Mapped[str] = mapped_column(String(16))  # allow | challenge | hold | block

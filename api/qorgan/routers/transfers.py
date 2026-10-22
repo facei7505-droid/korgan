@@ -2,13 +2,13 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..config import settings
 from ..db import get_db
 from ..events import emit
 from ..intel.extract import fingerprint, to_entity
-from ..models import Customer, KnownRecipient, Transfer
+from ..models import Customer, KnownRecipient, Transfer, new_id, utcnow
 from ..notify import telegram_guardian_alert
 from ..risk.engine import Behavior, assess, localize
 from ..schemas import ChallengeAnswer, GuardianAnswer, ScoreRequest
@@ -116,7 +116,7 @@ def score_transfer(
         if prev:
             return {"transfer": serialize(prev), "call": None, "registry_hits": [], "replayed": True,
                     "customer_message": _customer_message(prev.decision, req.lang), "guardians_notified": []}
-    customer = db.get(Customer, req.customer_id)
+    customer = db.get(Customer, req.customer_id, options=[joinedload(Customer.guardians)])
     if not customer:
         raise HTTPException(404, "customer not found")
     ent = to_entity(req.recipient.kind, req.recipient.value)
@@ -129,13 +129,13 @@ def score_transfer(
     hold_until = None
     if a.decision == "hold":
         hold_until = datetime.now(timezone.utc) + timedelta(minutes=settings.hold_minutes)
+    # id and timestamp set here so the transfer is written in the commit's single flush.
     t = Transfer(
-        customer_id=customer.id, amount=req.amount, recipient_kind=ent.kind, recipient_hash=rhash,
+        id=new_id("trf"), created_at=utcnow(), customer_id=customer.id, amount=req.amount, recipient_kind=ent.kind, recipient_hash=rhash,
         recipient_masked=ent.display, score=a.score, decision=a.decision, status=status,
         reasons=a.reasons, features=a.features, hold_until=hold_until, idempotency_key=idempotency_key,
     )
     db.add(t)
-    db.flush()
     if status == "completed":
         _remember_recipient(db, t)
     emit(db, "transfer.scored", {**serialize(t), "customer_name": customer.name, "call": a.call, "registry_hits": a.registry_hits})
